@@ -1,0 +1,23 @@
+{
+  "skill_name": "lakewatch-spl-migration",
+  "evals": [
+    {
+      "id": 1,
+      "name": "splunk-winevent-4625-failed-logons",
+      "prompt": "Translate this Splunk search into Databricks SQL for Lakewatch. I want to find users with many failed Windows logons (EventCode 4625) from many distinct source IPs over the last 24 hours.\n\n```spl\nindex=wineventlog sourcetype=WinEventLog:Security EventCode=4625 earliest=-24h\n| stats count AS failed_attempts, dc(src_ip) AS distinct_src_ips by user\n| where failed_attempts >= 10 AND distinct_src_ips >= 3\n| sort - failed_attempts\n```\n\nGive me the SQL plus inline notes on the table you chose and the column mapping.",
+      "expected_output": "SQL targeting gold.authentication (OCSF 3002, fed by windows_events_xml preset), filtered by metadata.log_name = 'windows_events_xml' and metadata.event_code = '4625', grouped by user.name with COUNT(*) and COUNT(DISTINCT src_endpoint.ip), HAVING thresholds. Mapping notes explain the destination, the EventID→metadata.event_code lift, and the column renames (user→user.name, src_ip→src_endpoint.ip)."
+    },
+    {
+      "id": 2,
+      "name": "splunk-cim-process-stats-encoded-ps",
+      "prompt": "Migrate this Splunk Enterprise Security search (uses the Endpoint.Processes CIM datamodel) to Lakewatch SQL. For each device, find the most recent process launch where the command line contains 'powershell' AND '-enc', last 7 days:\n\n```spl\n| tstats latest(_time) AS last_seen,\n         latest(Processes.process) AS process_cmd,\n         latest(Processes.parent_process_name) AS parent_proc,\n         latest(Processes.user) AS user,\n         latest(Processes.process_hash) AS sha256\n  from datamodel=Endpoint.Processes\n  where earliest=-7d Processes.process=\"*powershell*\" Processes.process=\"*-enc*\"\n  by Processes.dest\n```\n\nGive me the SQL plus mapping notes.",
+      "expected_output": "SQL targeting gold.process_activity (OCSF 1007). Source filter metadata.log_name = 'falcon_per_event_schema' (or another endpoint preset). Uses QUALIFY ROW_NUMBER() OVER (PARTITION BY device.uid ORDER BY time DESC) = 1 for the 'latest by dest' pattern. Maps Processes.process→process.cmd_line, Processes.parent_process_name→actor.process.name, Processes.user→process.user.name, Processes.dest→device.uid/device.hostname, Processes.process_hash→filter on process.file.hashes array. Translates the SPL `*powershell*` substring filters with an anchored regex (not naive LIKE) per the command-line guidance. Includes mapping notes explaining the CIM Endpoint.Processes → process_activity mapping."
+    },
+    {
+      "id": 3,
+      "name": "splunk-cloudtrail-no-time-failed-console-login",
+      "prompt": "Quick one — I'm in the Lakewatch explore view, want to find failed AWS console logins. I normally use the search-bar time picker so the SPL doesn't pin a time range. Help me translate this:\n\n```spl\nsourcetype=aws:cloudtrail eventName=ConsoleLogin errorMessage=\"Failed authentication\"\n| stats count AS failed_attempts, values(sourceIPAddress) AS src_ips by userIdentity.userName\n| where failed_attempts >= 5\n| sort - failed_attempts\n```\n\nGive me the SQL plus mapping notes.",
+      "expected_output": "SQL targeting gold.authentication (ConsoleLogin events route here, not api_activity) filtered by metadata.log_name = 'cloudtrail'. Time filter should be INRANGE(time) (no time pinned in the SPL → driven by UI timespan picker). Maps userIdentity.userName → user.name (or actor.user.name — verify), sourceIPAddress → src_endpoint.ip, errorMessage='Failed authentication' → status_id=2 or status='Failure' (Failed authentication is the standard CloudTrail message for ConsoleLogin failures), eventName='ConsoleLogin' → metadata.event_code. Uses COLLECT_SET (for SPL values()) and HAVING clause. Mapping notes explain CloudTrail's ConsoleLogin → authentication routing (not api_activity), and the INRANGE(time) decision."
+    }
+  ]
+}

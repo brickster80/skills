@@ -1,0 +1,26 @@
+{
+  "skill_name": "lakewatch-kql-migration",
+  "evals": [
+    {
+      "id": 1,
+      "name": "sentinel-signinlogs-failed-by-user",
+      "prompt": "Translate this Microsoft Sentinel KQL query into Databricks SQL for Lakewatch. I want to detect users with a lot of failed sign-ins from many distinct IPs in the last 24 hours.\n\n```kql\nSigninLogs\n| where TimeGenerated > ago(24h)\n| where ResultType != 0\n| summarize failed_attempts = count(), distinct_src_ips = dcount(IPAddress) by UserPrincipalName\n| where failed_attempts >= 10 and distinct_src_ips >= 3\n| order by failed_attempts desc\n```\n\nPlease give me the SQL plus inline notes on the table you chose and the column mapping.",
+      "expected_output": "Translated SQL targeting `lw-prod-catalog.gold.authentication`, filtered by `metadata.product.name = 'Azure Active Directory'` and `status != 'Success'`, grouped by `user.name`, with COUNT(*) and COUNT(DISTINCT src_endpoint.ip). Mapping notes explain the table choice and column renames (UserPrincipalName→user.name, IPAddress→src_endpoint.ip, ResultType!=0→status!='Success').",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "defender-process-arg-max-suspicious-cmd",
+      "prompt": "I'm migrating this Microsoft Defender XDR Advanced Hunting query to Databricks Lakewatch. The intent is: for each device in the last 7 days, find the most recent process launch where the command line contains 'powershell' AND '-enc' (base64-encoded PowerShell, a common attacker pattern).\n\n```kql\nDeviceProcessEvents\n| where Timestamp > ago(7d)\n| where ProcessCommandLine has 'powershell' and ProcessCommandLine has '-enc'\n| summarize arg_max(Timestamp, *) by DeviceId\n| project Timestamp, DeviceName, AccountName, ProcessCommandLine, InitiatingProcessFileName, FolderPath, SHA256\n```\n\nGive me the SQL plus mapping notes.",
+      "expected_output": "Translated SQL targeting `lw-prod-catalog.gold.process_activity` (class_uid 1007), filtered by `metadata.product.name = 'Microsoft Defender for Endpoint'` and time >= INTERVAL 7 DAYS. Uses QUALIFY ROW_NUMBER() OVER (PARTITION BY device.uid ORDER BY time DESC) = 1 for the arg_max. References nested struct paths: process.cmd_line, device.hostname, process.user.name, actor.process.name, process.file.path, and process.file.hashes with a SHA-256 extraction. Mapping notes explain the destination, the arg_max→QUALIFY pattern, and the hashes array shape.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "defender-mv-expand-emailurl-join",
+      "prompt": "Please translate this Defender Advanced Hunting KQL into Lakewatch SQL. I want to find users who clicked on a URL that originated from an email flagged as 'Phish' delivered in the last 3 days.\n\n```kql\nlet phishEmails = EmailEvents\n  | where Timestamp > ago(3d)\n  | where ThreatTypes has 'Phish'\n  | project NetworkMessageId, SenderFromAddress, Subject;\nUrlClickEvents\n| where Timestamp > ago(3d)\n| where Workload == 'Email'\n| join kind=inner phishEmails on NetworkMessageId\n| project Timestamp, AccountUpn, Url, IPAddress, SenderFromAddress, Subject\n```\n\nSQL plus mapping notes, please.",
+      "expected_output": "Translated SQL that joins `lw-prod-catalog.gold.http_activity` (UrlClickEvents) with `lw-prod-catalog.gold.email_activity` (EmailEvents) — OR notes that the NetworkMessageId join requires reading from `unmapped`/raw_data on http_activity since it doesn't have a clean OCSF mapping, and may need to fall back to silver `mde_url_events` / `mde_email_events` to do the join cleanly. Either way, the response should: (a) name both destination tables and class_uids, (b) handle the `ThreatTypes has 'Phish'` filter (probably via `threat.type` or `array_contains`), (c) show the column mapping for AccountUpn→actor.user.name, Url→url.url_string, IPAddress→src_endpoint.ip, SenderFromAddress→email.from, Subject→email.subject, (d) call out caveats around joining email-to-click via NetworkMessageId.",
+      "files": []
+    }
+  ]
+}
